@@ -258,6 +258,30 @@ func ResourceWLAN() *schema.Resource {
 					Type: schema.TypeString,
 				},
 			},
+			"private_preshared_key": {
+				Description: "Multi-PSK entries: additional per-client passphrases that map onto their own network (VLAN), " +
+					"independent of the SSID's own `passphrase`/`network_id`. Requires `security` to be `wpapsk`. " +
+					"A client authenticates with the SSID using one of these passphrases instead of the primary one, " +
+					"and is placed on that entry's `network_id` rather than the WLAN's default network.",
+				Type:     schema.TypeList,
+				Optional: true,
+				Elem: &schema.Resource{
+					Schema: map[string]*schema.Schema{
+						"network_id": {
+							Description: "ID of the network (VLAN) a client using this passphrase should be placed on.",
+							Type:        schema.TypeString,
+							Required:    true,
+						},
+						"password": {
+							Description:  "The pre-shared key for this entry. Must be between 8 and 255 characters.",
+							Type:         schema.TypeString,
+							Required:     true,
+							Sensitive:    true,
+							ValidateFunc: validation.StringLenBetween(8, 255),
+						},
+					},
+				},
+			},
 		},
 	}
 }
@@ -317,6 +341,11 @@ func resourceWLANGetResourceData(d *schema.ResourceData, meta interface{}) (*uni
 		return nil, fmt.Errorf("unable to process schedule block: %w", err)
 	}
 
+	privatePresharedKeys := listToPrivatePresharedKeys(d.Get("private_preshared_key").([]interface{}))
+	if len(privatePresharedKeys) > 0 && security != "wpapsk" {
+		return nil, fmt.Errorf("private_preshared_key is only valid for security type wpapsk")
+	}
+
 	minrateSettingPreference := "auto"
 	if d.Get("minimum_data_rate_2g_kbps").(int) != 0 || d.Get("minimum_data_rate_5g_kbps").(int) != 0 {
 		if d.Get("minimum_data_rate_2g_kbps").(int) == 0 || d.Get("minimum_data_rate_5g_kbps").(int) == 0 {
@@ -327,25 +356,27 @@ func resourceWLANGetResourceData(d *schema.ResourceData, meta interface{}) (*uni
 	}
 
 	return &unifi.WLAN{
-		Name:                    d.Get("name").(string),
-		XPassphrase:             passphrase,
-		HideSSID:                d.Get("hide_ssid").(bool),
-		IsGuest:                 d.Get("is_guest").(bool),
-		NetworkID:               networkID,
-		ApGroupIDs:              apGroupIDs,
-		UserGroupID:             d.Get("user_group_id").(string),
-		Security:                security,
-		WPA3Support:             wpa3,
-		WPA3Transition:          wpa3Transition,
-		MulticastEnhanceEnabled: d.Get("multicast_enhance").(bool),
-		MACFilterEnabled:        macFilterEnabled,
-		MACFilterList:           macFilterList,
-		MACFilterPolicy:         d.Get("mac_filter_policy").(string),
-		RADIUSProfileID:         d.Get("radius_profile_id").(string),
-		ScheduleWithDuration:    schedule,
-		ScheduleEnabled:         len(schedule) > 0,
-		WLANBand:                wlanBand,
-		PMFMode:                 pmf,
+		Name:                        d.Get("name").(string),
+		XPassphrase:                 passphrase,
+		HideSSID:                    d.Get("hide_ssid").(bool),
+		IsGuest:                     d.Get("is_guest").(bool),
+		NetworkID:                   networkID,
+		ApGroupIDs:                  apGroupIDs,
+		UserGroupID:                 d.Get("user_group_id").(string),
+		Security:                    security,
+		WPA3Support:                 wpa3,
+		WPA3Transition:              wpa3Transition,
+		MulticastEnhanceEnabled:     d.Get("multicast_enhance").(bool),
+		MACFilterEnabled:            macFilterEnabled,
+		MACFilterList:               macFilterList,
+		MACFilterPolicy:             d.Get("mac_filter_policy").(string),
+		RADIUSProfileID:             d.Get("radius_profile_id").(string),
+		ScheduleWithDuration:        schedule,
+		ScheduleEnabled:             len(schedule) > 0,
+		WLANBand:                    wlanBand,
+		PMFMode:                     pmf,
+		PrivatePresharedKeys:        privatePresharedKeys,
+		PrivatePresharedKeysEnabled: len(privatePresharedKeys) > 0,
 
 		// TODO: add to schema
 		WPAEnc:             "ccmp",
@@ -446,6 +477,7 @@ func resourceWLANSetResourceData(resp *unifi.WLAN, d *schema.ResourceData, meta 
 	d.Set("ap_group_ids", apGroupIDs)
 	d.Set("network_id", resp.NetworkID)
 	d.Set("pmf_mode", resp.PMFMode)
+	d.Set("private_preshared_key", listFromPrivatePresharedKeys(resp.PrivatePresharedKeys))
 	if resp.MinrateSettingPreference != "auto" && resp.MinrateNgEnabled {
 		d.Set("minimum_data_rate_2g_kbps", resp.MinrateNgDataRateKbps)
 	} else {
@@ -558,6 +590,29 @@ func fromSchedule(dow string, s unifi.WLANScheduleWithDuration) map[string]inter
 		"duration":     s.DurationMinutes,
 		"name":         s.Name,
 	}
+}
+
+func listToPrivatePresharedKeys(list []interface{}) []unifi.WLANPrivatePresharedKeys {
+	keys := make([]unifi.WLANPrivatePresharedKeys, 0, len(list))
+	for _, item := range list {
+		data := item.(map[string]interface{})
+		keys = append(keys, unifi.WLANPrivatePresharedKeys{
+			NetworkID: data["network_id"].(string),
+			Password:  data["password"].(string),
+		})
+	}
+	return keys
+}
+
+func listFromPrivatePresharedKeys(keys []unifi.WLANPrivatePresharedKeys) []interface{} {
+	list := make([]interface{}, 0, len(keys))
+	for _, k := range keys {
+		list = append(list, map[string]interface{}{
+			"network_id": k.NetworkID,
+			"password":   k.Password,
+		})
+	}
+	return list
 }
 
 func listFromSchedules(ss []unifi.WLANScheduleWithDuration) []interface{} {
