@@ -338,8 +338,11 @@ func resourceWLANGetResourceData(d *schema.ResourceData, meta interface{}) (*uni
 
 	if wpa3Transition && pmf == "disabled" {
 		return nil, errors.New("WPA 3 transition mode requires pmf_mode to be turned on")
-	} else if wpa3 && !wpa3Transition && pmf != "required" {
-		return nil, errors.New("for WPA 3 you must set pmf_mode to required")
+	} else if wpa3 && !wpa3Transition && pmf == "disabled" {
+		// The WPA3 spec mandates PMF, but UniFi controllers (observed on
+		// 9.5.21) accept and run wpa3 + pmf_mode="optional"; don't be
+		// stricter than the controller — only reject "disabled".
+		return nil, errors.New("for WPA 3 you must set pmf_mode to optional or required")
 	}
 
 	macFilterEnabled, _ := d.Get("mac_filter_enabled").(bool)
