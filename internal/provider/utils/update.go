@@ -6,16 +6,14 @@ import (
 	"github.com/filipowm/go-unifi/unifi"
 )
 
-// ReReadOnUpdateNotFound works around a go-unifi defect shared by every
+// ReReadOnUpdateNotFound works around a go-unifi v1.9.3 defect shared by every
 // generated update* function: after a successful PUT they apply a
 // `len(respBody.Data) != 1 -> unifi.ErrNotFound` guard, so a successful-but-empty
 // response (HTTP 200, {"meta":{"rc":"ok"},"data":[]}) — which some UniFi
 // controllers return on an update — is converted into unifi.ErrNotFound even
 // though the change WAS applied. SDKv2 Update handlers that surface that verbatim
 // via diag.FromErr therefore fail with "Error: not found" on a successful update.
-// See upstream issue filipowm/terraform-provider-unifi#98, fixed for later
-// resources in #162 (backported here for wlan on the v1.0.0 base this fork
-// tracks).
+// See issue #98.
 //
 // Given the (object, error) pair returned by an update* call and a reRead closure
 // (typically c.Get<Resource>(ctx, site, id)), it returns:
@@ -33,6 +31,9 @@ import (
 // error handler before the len() guard is reached, so "update -> ErrNotFound"
 // never by itself means "deleted"; only the re-read's own ErrNotFound does. That
 // is why the re-read GET is required rather than echoing the request struct.
+//
+// When the upstream go-unifi template is fixed and the pin bumped, update* stops
+// returning the spurious ErrNotFound and this helper becomes a harmless no-op.
 func ReReadOnUpdateNotFound[T any](updated T, updateErr error, reRead func() (T, error)) (result T, found bool, err error) {
 	if updateErr == nil {
 		return updated, true, nil
