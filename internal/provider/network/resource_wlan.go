@@ -642,10 +642,15 @@ func resourceWLANUpdate(ctx context.Context, d *schema.ResourceData, meta interf
 	}
 	req.SiteID = site
 
+	var resp *unifi.WLAN
+	if len(req.PrivatePresharedKeys) == 0 && d.HasChange("private_preshared_key") {
+		resp, err = updateWLANClearingPrivatePresharedKeys(ctx, c, site, req)
+	} else {
+		resp, err = c.UpdateWLAN(ctx, site, req)
+	}
 	// go-unifi v1.9.2's updateWLAN converts a successful-but-empty PUT response into
 	// unifi.ErrNotFound (see utils.ReReadOnUpdateNotFound / issue #98); re-read to
 	// tell a spurious error from a genuine out-of-band deletion.
-	resp, err := c.UpdateWLAN(ctx, site, req)
 	resp, found, err := utils.ReReadOnUpdateNotFound(resp, err, func() (*unifi.WLAN, error) {
 		return c.GetWLAN(ctx, site, req.ID)
 	})
@@ -658,6 +663,33 @@ func resourceWLANUpdate(ctx context.Context, d *schema.ResourceData, meta interf
 	}
 
 	return resourceWLANSetResourceData(resp, d, site)
+}
+
+// updateWLANClearingPrivatePresharedKeys is c.UpdateWLAN with
+// private_preshared_keys forced into the PUT body. go-unifi tags the field
+// omitempty, so an emptied list is dropped from the payload and the
+// controller silently keeps the previous entries — along with their
+// network references, which then e.g. block deleting those networks.
+// The controller only clears entries on an explicit empty list.
+func updateWLANClearingPrivatePresharedKeys(ctx context.Context, c *base.Client, site string, req *unifi.WLAN) (*unifi.WLAN, error) {
+	payload := struct {
+		*unifi.WLAN
+		PrivatePresharedKeys []unifi.WLANPrivatePresharedKeys `json:"private_preshared_keys"`
+	}{WLAN: req, PrivatePresharedKeys: []unifi.WLANPrivatePresharedKeys{}}
+
+	var respBody struct {
+		Meta unifi.Meta   `json:"meta"`
+		Data []unifi.WLAN `json:"data"`
+	}
+	if err := c.Put(ctx, fmt.Sprintf("s/%s/rest/wlanconf/%s", site, req.ID), &payload, &respBody); err != nil {
+		return nil, err
+	}
+	// Mirror updateWLAN: the controller answers wlanconf PUTs with an empty
+	// body, which surfaces as ErrNotFound for the caller's re-read to resolve.
+	if len(respBody.Data) != 1 {
+		return nil, unifi.ErrNotFound
+	}
+	return &respBody.Data[0], nil
 }
 
 func resourceWLANDelete(ctx context.Context, d *schema.ResourceData, meta interface{}) diag.Diagnostics {
