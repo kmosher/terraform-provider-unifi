@@ -278,6 +278,35 @@ func ResourceWLAN() *schema.Resource {
 					Type: schema.TypeString,
 				},
 			},
+			"private_preshared_key": {
+				Description: "Multi-PSK entries: additional per-client passphrases that map onto their own network (VLAN), " +
+					"independent of the SSID's own `passphrase`/`network_id`. Requires `security` to be `wpapsk`. " +
+					"A client authenticates with the SSID using one of these passphrases instead of the primary one, " +
+					"and is placed on that entry's `network_id` rather than the WLAN's default network. " +
+					"**Warning:** once any entry is set, the controller invalidates the WLAN's primary `passphrase` " +
+					"(it regenerates it server-side) — every client must match one of these entries, and clients " +
+					"that were using the primary passphrase are disconnected. To keep them working, add the primary " +
+					"passphrase as its own entry mapped to the WLAN's default network. The configured " +
+					"`passphrase`/`network_id` are kept in state as-is.",
+				Type:     schema.TypeList,
+				Optional: true,
+				Elem: &schema.Resource{
+					Schema: map[string]*schema.Schema{
+						"network_id": {
+							Description: "ID of the network (VLAN) a client using this passphrase should be placed on.",
+							Type:        schema.TypeString,
+							Required:    true,
+						},
+						"password": {
+							Description:  "The pre-shared key for this entry. Must be between 8 and 255 characters.",
+							Type:         schema.TypeString,
+							Required:     true,
+							Sensitive:    true,
+							ValidateFunc: validation.StringLenBetween(8, 255),
+						},
+					},
+				},
+			},
 		},
 	}
 }
@@ -375,6 +404,12 @@ func resourceWLANGetResourceData(d *schema.ResourceData, meta interface{}) (*uni
 		return nil, fmt.Errorf("unable to process schedule block: %w", err)
 	}
 
+	pskList, _ := d.Get("private_preshared_key").([]interface{})
+	privatePresharedKeys := listToPrivatePresharedKeys(pskList)
+	if len(privatePresharedKeys) > 0 && security != "wpapsk" {
+		return nil, errors.New("private_preshared_key is only valid for security type wpapsk")
+	}
+
 	minRate2g, _ := d.Get("minimum_data_rate_2g_kbps").(int)
 	minRate5g, _ := d.Get("minimum_data_rate_5g_kbps").(int)
 
@@ -402,27 +437,29 @@ func resourceWLANGetResourceData(d *schema.ResourceData, meta interface{}) (*uni
 	fastRoaming, _ := d.Get("fast_roaming_enabled").(bool)
 
 	return &unifi.WLAN{
-		Name:                    name,
-		XPassphrase:             passphrase,
-		HideSSID:                hideSSID,
-		IsGuest:                 isGuest,
-		NetworkID:               networkID,
-		ApGroupIDs:              apGroupIDs,
-		UserGroupID:             userGroupID,
-		Security:                security,
-		WPA3Support:             wpa3,
-		WPA3Transition:          wpa3Transition,
-		MulticastEnhanceEnabled: multicastEnhance,
-		MACFilterEnabled:        macFilterEnabled,
-		MACFilterList:           macFilterList,
-		MACFilterPolicy:         macFilterPolicy,
-		RADIUSProfileID:         radiusProfileID,
-		ScheduleWithDuration:    schedule,
-		ScheduleEnabled:         len(schedule) > 0,
-		WLANBand:                wlanBand,
-		WLANBands:               wlanBands,
-		SettingPreference:       settingPreference,
-		PMFMode:                 pmf,
+		Name:                        name,
+		XPassphrase:                 passphrase,
+		HideSSID:                    hideSSID,
+		IsGuest:                     isGuest,
+		NetworkID:                   networkID,
+		ApGroupIDs:                  apGroupIDs,
+		UserGroupID:                 userGroupID,
+		Security:                    security,
+		WPA3Support:                 wpa3,
+		WPA3Transition:              wpa3Transition,
+		MulticastEnhanceEnabled:     multicastEnhance,
+		MACFilterEnabled:            macFilterEnabled,
+		MACFilterList:               macFilterList,
+		MACFilterPolicy:             macFilterPolicy,
+		RADIUSProfileID:             radiusProfileID,
+		ScheduleWithDuration:        schedule,
+		ScheduleEnabled:             len(schedule) > 0,
+		WLANBand:                    wlanBand,
+		WLANBands:                   wlanBands,
+		SettingPreference:           settingPreference,
+		PMFMode:                     pmf,
+		PrivatePresharedKeys:        privatePresharedKeys,
+		PrivatePresharedKeysEnabled: len(privatePresharedKeys) > 0,
 
 		// TODO: add to schema
 		WPAEnc:             "ccmp",
@@ -488,6 +525,23 @@ func resourceWLANSetResourceData(resp *unifi.WLAN, d *schema.ResourceData, site 
 		wpa3Transition = resp.WPA3Transition
 	}
 
+	networkID := resp.NetworkID
+	// With private PSKs enabled the controller owns the WLAN's primary
+	// passphrase and network: it regenerates x_passphrase and reassigns
+	// networkconf_id (typically to the site's default LAN) server-side.
+	// Reading those rewritten values back would produce a permanent diff
+	// against the configured ones, so preserve the configured values.
+	// Clients authenticate with the per-key passphrases and are placed on
+	// each key's network regardless.
+	if resp.PrivatePresharedKeysEnabled {
+		if v, ok := d.GetOk("passphrase"); ok {
+			passphrase, _ = v.(string)
+		}
+		if v, ok := d.GetOk("network_id"); ok {
+			networkID, _ = v.(string)
+		}
+	}
+
 	macFilterEnabled := resp.MACFilterEnabled
 	var macFilterList *schema.Set
 	macFilterPolicy := "deny"
@@ -534,10 +588,11 @@ func resourceWLANSetResourceData(resp *unifi.WLAN, d *schema.ResourceData, site 
 		"uapsd":                     resp.UapsdEnabled,
 		"fast_roaming_enabled":      resp.FastRoamingEnabled,
 		"ap_group_ids":              apGroupIDs,
-		"network_id":                resp.NetworkID,
+		"network_id":                networkID,
 		"pmf_mode":                  resp.PMFMode,
 		"minimum_data_rate_2g_kbps": minRate2g,
 		"minimum_data_rate_5g_kbps": minRate5g,
+		"private_preshared_key":     listFromPrivatePresharedKeys(resp.PrivatePresharedKeys),
 	} {
 		if err := d.Set(key, value); err != nil {
 			return diag.FromErr(err)
@@ -589,10 +644,15 @@ func resourceWLANUpdate(ctx context.Context, d *schema.ResourceData, meta interf
 	}
 	req.SiteID = site
 
+	var resp *unifi.WLAN
+	if len(req.PrivatePresharedKeys) == 0 && d.HasChange("private_preshared_key") {
+		resp, err = updateWLANClearingPrivatePresharedKeys(ctx, c, site, req)
+	} else {
+		resp, err = c.UpdateWLAN(ctx, site, req)
+	}
 	// go-unifi v1.9.2's updateWLAN converts a successful-but-empty PUT response into
 	// unifi.ErrNotFound (see utils.ReReadOnUpdateNotFound / issue #98); re-read to
 	// tell a spurious error from a genuine out-of-band deletion.
-	resp, err := c.UpdateWLAN(ctx, site, req)
 	resp, found, err := utils.ReReadOnUpdateNotFound(resp, err, func() (*unifi.WLAN, error) {
 		return c.GetWLAN(ctx, site, req.ID)
 	})
@@ -605,6 +665,33 @@ func resourceWLANUpdate(ctx context.Context, d *schema.ResourceData, meta interf
 	}
 
 	return resourceWLANSetResourceData(resp, d, site)
+}
+
+// updateWLANClearingPrivatePresharedKeys is c.UpdateWLAN with
+// private_preshared_keys forced into the PUT body. go-unifi tags the field
+// omitempty, so an emptied list is dropped from the payload and the
+// controller silently keeps the previous entries — along with their
+// network references, which then e.g. block deleting those networks.
+// The controller only clears entries on an explicit empty list.
+func updateWLANClearingPrivatePresharedKeys(ctx context.Context, c *base.Client, site string, req *unifi.WLAN) (*unifi.WLAN, error) {
+	payload := struct {
+		*unifi.WLAN
+		PrivatePresharedKeys []unifi.WLANPrivatePresharedKeys `json:"private_preshared_keys"`
+	}{WLAN: req, PrivatePresharedKeys: []unifi.WLANPrivatePresharedKeys{}}
+
+	var respBody struct {
+		Meta unifi.Meta   `json:"meta"`
+		Data []unifi.WLAN `json:"data"`
+	}
+	if err := c.Put(ctx, fmt.Sprintf("s/%s/rest/wlanconf/%s", site, req.ID), &payload, &respBody); err != nil {
+		return nil, err
+	}
+	// Mirror updateWLAN: the controller answers wlanconf PUTs with an empty
+	// body, which surfaces as ErrNotFound for the caller's re-read to resolve.
+	if len(respBody.Data) != 1 {
+		return nil, unifi.ErrNotFound
+	}
+	return &respBody.Data[0], nil
 }
 
 func resourceWLANDelete(ctx context.Context, d *schema.ResourceData, meta interface{}) diag.Diagnostics {
@@ -664,6 +751,34 @@ func fromSchedule(dow string, s unifi.WLANScheduleWithDuration) map[string]inter
 		"duration":     s.DurationMinutes,
 		"name":         s.Name,
 	}
+}
+
+func listToPrivatePresharedKeys(list []interface{}) []unifi.WLANPrivatePresharedKeys {
+	keys := make([]unifi.WLANPrivatePresharedKeys, 0, len(list))
+	for _, item := range list {
+		data, ok := item.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		networkID, _ := data["network_id"].(string)
+		password, _ := data["password"].(string)
+		keys = append(keys, unifi.WLANPrivatePresharedKeys{
+			NetworkID: networkID,
+			Password:  password,
+		})
+	}
+	return keys
+}
+
+func listFromPrivatePresharedKeys(keys []unifi.WLANPrivatePresharedKeys) []interface{} {
+	list := make([]interface{}, 0, len(keys))
+	for _, k := range keys {
+		list = append(list, map[string]interface{}{
+			"network_id": k.NetworkID,
+			"password":   k.Password,
+		})
+	}
+	return list
 }
 
 func listFromSchedules(ss []unifi.WLANScheduleWithDuration) []interface{} {
