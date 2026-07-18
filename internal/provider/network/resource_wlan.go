@@ -282,7 +282,10 @@ func ResourceWLAN() *schema.Resource {
 				Description: "Multi-PSK entries: additional per-client passphrases that map onto their own network (VLAN), " +
 					"independent of the SSID's own `passphrase`/`network_id`. Requires `security` to be `wpapsk`. " +
 					"A client authenticates with the SSID using one of these passphrases instead of the primary one, " +
-					"and is placed on that entry's `network_id` rather than the WLAN's default network.",
+					"and is placed on that entry's `network_id` rather than the WLAN's default network. " +
+					"Note: once any entry is set, the controller takes ownership of the WLAN's primary `passphrase` " +
+					"and `network_id` (clients must use one of the per-key passphrases); the configured values are " +
+					"kept in state as-is.",
 				Type:     schema.TypeList,
 				Optional: true,
 				Elem: &schema.Resource{
@@ -519,6 +522,23 @@ func resourceWLANSetResourceData(resp *unifi.WLAN, d *schema.ResourceData, site 
 		wpa3Transition = resp.WPA3Transition
 	}
 
+	networkID := resp.NetworkID
+	// With private PSKs enabled the controller owns the WLAN's primary
+	// passphrase and network: it regenerates x_passphrase and reassigns
+	// networkconf_id (typically to the site's default LAN) server-side.
+	// Reading those rewritten values back would produce a permanent diff
+	// against the configured ones, so preserve the configured values.
+	// Clients authenticate with the per-key passphrases and are placed on
+	// each key's network regardless.
+	if resp.PrivatePresharedKeysEnabled {
+		if v, ok := d.GetOk("passphrase"); ok {
+			passphrase, _ = v.(string)
+		}
+		if v, ok := d.GetOk("network_id"); ok {
+			networkID, _ = v.(string)
+		}
+	}
+
 	macFilterEnabled := resp.MACFilterEnabled
 	var macFilterList *schema.Set
 	macFilterPolicy := "deny"
@@ -565,7 +585,7 @@ func resourceWLANSetResourceData(resp *unifi.WLAN, d *schema.ResourceData, site 
 		"uapsd":                     resp.UapsdEnabled,
 		"fast_roaming_enabled":      resp.FastRoamingEnabled,
 		"ap_group_ids":              apGroupIDs,
-		"network_id":                resp.NetworkID,
+		"network_id":                networkID,
 		"pmf_mode":                  resp.PMFMode,
 		"minimum_data_rate_2g_kbps": minRate2g,
 		"minimum_data_rate_5g_kbps": minRate5g,

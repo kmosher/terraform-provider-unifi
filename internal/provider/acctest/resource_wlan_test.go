@@ -29,6 +29,45 @@ func TestAccWLAN_wpapsk(t *testing.T) {
 	})
 }
 
+func TestAccWLAN_privatePresharedKey(t *testing.T) {
+	name := acctest.RandomWithPrefix("tfacc")
+	subnet, vlan := pt.GetTestVLAN(t)
+	pskSubnet, pskVlan := pt.GetTestVLAN(t)
+
+	AcceptanceTest(t, AcceptanceTestCase{
+		Steps: []resource.TestStep{
+			{
+				// The post-apply idempotency plan doubles as a regression
+				// check: the controller rewrites the WLAN's primary
+				// passphrase/network_id once private PSKs are enabled, and
+				// reading those back verbatim would leave a permanent diff.
+				Config: testAccWLANConfigPrivatePresharedKey(name, subnet, vlan, pskSubnet, pskVlan, "first-psk-passphrase"),
+				Check: resource.ComposeTestCheckFunc(
+					resource.TestCheckResourceAttr("unifi_wlan.test", "private_preshared_key.#", "1"),
+					resource.TestCheckResourceAttr("unifi_wlan.test", "private_preshared_key.0.password", "first-psk-passphrase"),
+					resource.TestCheckResourceAttrPair("unifi_wlan.test", "private_preshared_key.0.network_id", "unifi_network.psk", "id"),
+				),
+			},
+			// The controller-owned primary passphrase/network_id come back
+			// rewritten on import, so they can't survive an import diff.
+			pt.ImportStep("unifi_wlan.test", "passphrase", "network_id"),
+			{
+				Config: testAccWLANConfigPrivatePresharedKey(name, subnet, vlan, pskSubnet, pskVlan, "rotated-psk-passphrase"),
+				Check: resource.ComposeTestCheckFunc(
+					resource.TestCheckResourceAttr("unifi_wlan.test", "private_preshared_key.0.password", "rotated-psk-passphrase"),
+				),
+			},
+			{
+				// Back to a plain WLAN: entries removed cleanly.
+				Config: testAccWLANConfigWpapsk(name, subnet, vlan, "disabled"),
+				Check: resource.ComposeTestCheckFunc(
+					resource.TestCheckResourceAttr("unifi_wlan.test", "private_preshared_key.#", "0"),
+				),
+			},
+		},
+	})
+}
+
 func TestAccWLAN_open(t *testing.T) {
 	name := acctest.RandomWithPrefix("tfacc")
 	subnet, vlan := pt.GetTestVLAN(t)
@@ -385,6 +424,31 @@ resource "unifi_wlan" "test" {
 	pmf_mode = %[2]q
 }
 `, name, pmf)
+}
+
+func testAccWLANConfigPrivatePresharedKey(name string, subnet *net.IPNet, vlan int, pskSubnet *net.IPNet, pskVlan int, pskPassword string) string {
+	return testAccWLANBaseConfig(name, subnet, vlan) + fmt.Sprintf(`
+resource "unifi_network" "psk" {
+	name    = "%[1]s-psk"
+	purpose = "corporate"
+	subnet  = "%[2]s"
+    vlan_id = "%[3]d"
+}
+
+resource "unifi_wlan" "test" {
+	name          = "%[1]s-wpapsk"
+	network_id    = unifi_network.test.id
+	passphrase    = "12345678"
+	ap_group_ids  = [data.unifi_ap_group.default.id]
+	user_group_id = data.unifi_user_group.default.id
+	security      = "wpapsk"
+
+	private_preshared_key {
+		password   = %[4]q
+		network_id = unifi_network.psk.id
+	}
+}
+`, name, pskSubnet, pskVlan, pskPassword)
 }
 
 func testAccWLANConfigWpaeap(name string, subnet *net.IPNet, vlan int) string {

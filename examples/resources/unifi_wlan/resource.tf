@@ -33,3 +33,29 @@ resource "unifi_wlan" "wifi" {
   ap_group_ids  = [data.unifi_ap_group.default.id]
   user_group_id = data.unifi_user_group.default.id
 }
+
+# Multi-PSK: an SSID whose clients are placed on a network (VLAN) chosen
+# by which passphrase they authenticate with.
+resource "unifi_network" "iot" {
+  name    = "iot-vlan"
+  purpose = "corporate"
+  subnet  = "10.0.20.1/24"
+  vlan_id = 20
+}
+
+resource "unifi_wlan" "multi_psk" {
+  name       = "multi-psk-ssid"
+  passphrase = "primary-passphrase"
+  security   = "wpapsk"
+
+  network_id    = unifi_network.vlan.id
+  ap_group_ids  = [data.unifi_ap_group.default.id]
+  user_group_id = data.unifi_user_group.default.id
+
+  # Clients using this passphrase land on the iot VLAN instead of the
+  # WLAN's default network.
+  private_preshared_key {
+    password   = "iot-device-passphrase"
+    network_id = unifi_network.iot.id
+  }
+}
