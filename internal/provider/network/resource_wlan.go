@@ -283,9 +283,11 @@ func ResourceWLAN() *schema.Resource {
 					"independent of the SSID's own `passphrase`/`network_id`. Requires `security` to be `wpapsk`. " +
 					"A client authenticates with the SSID using one of these passphrases instead of the primary one, " +
 					"and is placed on that entry's `network_id` rather than the WLAN's default network. " +
-					"Note: once any entry is set, the controller takes ownership of the WLAN's primary `passphrase` " +
-					"and `network_id` (clients must use one of the per-key passphrases); the configured values are " +
-					"kept in state as-is.",
+					"**Warning:** once any entry is set, the controller invalidates the WLAN's primary `passphrase` " +
+					"(it regenerates it server-side) — every client must match one of these entries, and clients " +
+					"that were using the primary passphrase are disconnected. To keep them working, add the primary " +
+					"passphrase as its own entry mapped to the WLAN's default network. The configured " +
+					"`passphrase`/`network_id` are kept in state as-is.",
 				Type:     schema.TypeList,
 				Optional: true,
 				Elem: &schema.Resource{

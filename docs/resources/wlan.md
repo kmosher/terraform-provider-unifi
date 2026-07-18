@@ -73,6 +73,15 @@ resource "unifi_wlan" "multi_psk" {
   ap_group_ids  = [data.unifi_ap_group.default.id]
   user_group_id = data.unifi_user_group.default.id
 
+  # Once any entry exists, the controller invalidates the primary
+  # passphrase — clients must match an entry. This one re-admits the
+  # primary passphrase onto the WLAN's default network so existing
+  # clients keep working.
+  private_preshared_key {
+    password   = "primary-passphrase"
+    network_id = unifi_network.vlan.id
+  }
+
   # Clients using this passphrase land on the iot VLAN instead of the
   # WLAN's default network.
   private_preshared_key {
@@ -117,7 +126,7 @@ resource "unifi_wlan" "multi_psk" {
   * `required` - All clients must support PMF (required for WPA3)
   * `optional` - Clients can optionally use PMF (recommended when transitioning from WPA2 to WPA3)
   * `disabled` - PMF is disabled (not compatible with WPA3) Defaults to `disabled`.
-- `private_preshared_key` (Block List) Multi-PSK entries: additional per-client passphrases that map onto their own network (VLAN), independent of the SSID's own `passphrase`/`network_id`. Requires `security` to be `wpapsk`. A client authenticates with the SSID using one of these passphrases instead of the primary one, and is placed on that entry's `network_id` rather than the WLAN's default network. Note: once any entry is set, the controller takes ownership of the WLAN's primary `passphrase` and `network_id` (clients must use one of the per-key passphrases); the configured values are kept in state as-is. (see [below for nested schema](#nestedblock--private_preshared_key))
+- `private_preshared_key` (Block List) Multi-PSK entries: additional per-client passphrases that map onto their own network (VLAN), independent of the SSID's own `passphrase`/`network_id`. Requires `security` to be `wpapsk`. A client authenticates with the SSID using one of these passphrases instead of the primary one, and is placed on that entry's `network_id` rather than the WLAN's default network. **Warning:** once any entry is set, the controller invalidates the WLAN's primary `passphrase` (it regenerates it server-side) — every client must match one of these entries, and clients that were using the primary passphrase are disconnected. To keep them working, add the primary passphrase as its own entry mapped to the WLAN's default network. The configured `passphrase`/`network_id` are kept in state as-is. (see [below for nested schema](#nestedblock--private_preshared_key))
 - `proxy_arp` (Boolean) Enable ARP proxy on this WLAN. When enabled, the UniFi controller will respond to ARP requests on behalf of clients, reducing broadcast traffic and potentially improving network performance. This is particularly useful in high-density wireless environments. Defaults to `false`.
 - `radius_profile_id` (String) ID of the RADIUS profile to use for WPA Enterprise authentication (when security is 'wpaeap'). Reference existing profiles using the `unifi_radius_profile` data source.
 - `schedule` (Block List) Time-based access control configuration for the wireless network. Allows automatic enabling/disabling of the network on specified schedules. (see [below for nested schema](#nestedblock--schedule))

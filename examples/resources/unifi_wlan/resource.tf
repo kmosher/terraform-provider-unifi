@@ -52,6 +52,15 @@ resource "unifi_wlan" "multi_psk" {
   ap_group_ids  = [data.unifi_ap_group.default.id]
   user_group_id = data.unifi_user_group.default.id
 
+  # Once any entry exists, the controller invalidates the primary
+  # passphrase — clients must match an entry. This one re-admits the
+  # primary passphrase onto the WLAN's default network so existing
+  # clients keep working.
+  private_preshared_key {
+    password   = "primary-passphrase"
+    network_id = unifi_network.vlan.id
+  }
+
   # Clients using this passphrase land on the iot VLAN instead of the
   # WLAN's default network.
   private_preshared_key {
