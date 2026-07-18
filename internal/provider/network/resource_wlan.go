@@ -402,9 +402,10 @@ func resourceWLANGetResourceData(d *schema.ResourceData, meta interface{}) (*uni
 		return nil, fmt.Errorf("unable to process schedule block: %w", err)
 	}
 
-	privatePresharedKeys := listToPrivatePresharedKeys(d.Get("private_preshared_key").([]interface{}))
+	pskList, _ := d.Get("private_preshared_key").([]interface{})
+	privatePresharedKeys := listToPrivatePresharedKeys(pskList)
 	if len(privatePresharedKeys) > 0 && security != "wpapsk" {
-		return nil, fmt.Errorf("private_preshared_key is only valid for security type wpapsk")
+		return nil, errors.New("private_preshared_key is only valid for security type wpapsk")
 	}
 
 	minRate2g, _ := d.Get("minimum_data_rate_2g_kbps").(int)
@@ -721,10 +722,15 @@ func fromSchedule(dow string, s unifi.WLANScheduleWithDuration) map[string]inter
 func listToPrivatePresharedKeys(list []interface{}) []unifi.WLANPrivatePresharedKeys {
 	keys := make([]unifi.WLANPrivatePresharedKeys, 0, len(list))
 	for _, item := range list {
-		data := item.(map[string]interface{})
+		data, ok := item.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		networkID, _ := data["network_id"].(string)
+		password, _ := data["password"].(string)
 		keys = append(keys, unifi.WLANPrivatePresharedKeys{
-			NetworkID: data["network_id"].(string),
-			Password:  data["password"].(string),
+			NetworkID: networkID,
+			Password:  password,
 		})
 	}
 	return keys
