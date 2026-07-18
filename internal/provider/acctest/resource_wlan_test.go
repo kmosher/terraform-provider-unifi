@@ -58,7 +58,15 @@ func TestAccWLAN_privatePresharedKey(t *testing.T) {
 				),
 			},
 			{
-				// Back to a plain WLAN: entries removed cleanly.
+				// Clear the entries while their referenced network still
+				// exists...
+				Config: testAccWLANConfigPrivatePresharedKeyCleared(name, subnet, vlan, pskSubnet, pskVlan),
+				Check: resource.ComposeTestCheckFunc(
+					resource.TestCheckResourceAttr("unifi_wlan.test", "private_preshared_key.#", "0"),
+				),
+			},
+			{
+				// ...then the now-unreferenced network deletes cleanly.
 				Config: testAccWLANConfigWpapsk(name, subnet, vlan, "disabled"),
 				Check: resource.ComposeTestCheckFunc(
 					resource.TestCheckResourceAttr("unifi_wlan.test", "private_preshared_key.#", "0"),
@@ -449,6 +457,29 @@ resource "unifi_wlan" "test" {
 	}
 }
 `, name, pskSubnet, pskVlan, pskPassword)
+}
+
+// Same two networks as testAccWLANConfigPrivatePresharedKey, but the WLAN
+// has no private_preshared_key entries — exercises clearing them without
+// simultaneously destroying the network they referenced.
+func testAccWLANConfigPrivatePresharedKeyCleared(name string, subnet *net.IPNet, vlan int, pskSubnet *net.IPNet, pskVlan int) string {
+	return testAccWLANBaseConfig(name, subnet, vlan) + fmt.Sprintf(`
+resource "unifi_network" "psk" {
+	name    = "%[1]s-psk"
+	purpose = "corporate"
+	subnet  = "%[2]s"
+    vlan_id = "%[3]d"
+}
+
+resource "unifi_wlan" "test" {
+	name          = "%[1]s-wpapsk"
+	network_id    = unifi_network.test.id
+	passphrase    = "12345678"
+	ap_group_ids  = [data.unifi_ap_group.default.id]
+	user_group_id = data.unifi_user_group.default.id
+	security      = "wpapsk"
+}
+`, name, pskSubnet, pskVlan)
 }
 
 func testAccWLANConfigWpaeap(name string, subnet *net.IPNet, vlan int) string {
